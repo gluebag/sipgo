@@ -17,7 +17,7 @@ import (
 func TestUnmarshalParams(t *testing.T) {
 	s := "transport=tls;lr"
 	params := HeaderParams{}
-	UnmarshalParams(s, ';', '?', params)
+	UnmarshalHeaderParams(s, ';', '?', params)
 	assert.Equal(t, 2, len(params))
 	assert.Equal(t, "tls", params["transport"])
 	assert.Equal(t, "", params["lr"])
@@ -46,7 +46,7 @@ func TestParseHeaders(t *testing.T) {
 		h := testParseHeader(t, parser, header)
 
 		hstr := h.String()
-		// TODO find better way to compare
+		// Not best way to compare, just lazy
 		unordered := header[:strings.Index(header, ";")] + ";branch=" + branch + ";rport"
 		assert.True(t, hstr == header || hstr == unordered, hstr)
 
@@ -484,7 +484,6 @@ a=rtpmap:31 LPC`,
 	msg, err := parser.ParseSIP(data)
 	require.Nil(t, err, err)
 
-	// TODO check each header
 	t.Log(msg.String())
 }
 
@@ -546,16 +545,6 @@ func BenchmarkParser(b *testing.B) {
 			}
 		})
 	})
-
-	// b.Run("Paralel", func(b *testing.B) {
-	// 	b.RunParallel(func(p *testing.PB) {
-	// 		b.ResetTimer()
-	// 		for p.Next() {
-	// 			testcase(b)
-	// 		}
-	// 	})
-	// })
-
 }
 
 func BenchmarkParseStartLine(b *testing.B) {

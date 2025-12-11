@@ -3,6 +3,7 @@ package sip
 import (
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,11 @@ func testCreateInvite(t testing.TB, targetSipUri string, transport, fromAddr str
 }
 
 func TestResolveInterfaceIP(t *testing.T) {
+	if os.Getenv("TEST_INTEGRATION") == "" {
+		t.Skip("Use TEST_INTEGRATION env value to run this test")
+		return
+	}
+
 	ip, iface, err := ResolveInterfacesIP("ip4", nil)
 	require.NoError(t, err)
 	require.NotNil(t, ip)
@@ -68,7 +74,7 @@ func TestResolveInterfaceIP(t *testing.T) {
 
 	t.Log(ip.String(), len(ip), iface.Name)
 	assert.False(t, ip.IsLoopback())
-	assert.NotNil(t, ip.To16())
+	assert.Nil(t, ip.To4())
 
 	ipnet := net.IPNet{
 		IP:   net.ParseIP("127.0.0.1"),

@@ -71,41 +71,34 @@ func GenerateTagN(n int) string {
 	return sb.String()
 }
 
-// MakeDialogIDFromMessage creates dialog ID of message.
-// Use UASReadRequestDialogID UACReadRequestDialogID for more specific
+// DialogIDFromResponse creates dialog ID of message.
 // returns error if callid or to tag or from tag does not exists
-func MakeDialogIDFromRequest(msg *Request) (string, error) {
-	return UASReadRequestDialogID(msg)
-}
-
-// MakeDialogIDFromResponse creates dialog ID of message.
-// returns error if callid or to tag or from tag does not exists
-func MakeDialogIDFromResponse(msg *Response) (string, error) {
+func DialogIDFromResponse(msg *Response) (string, error) {
 	var callID, toTag, fromTag string = "", "", ""
 	if err := getDialogIDFromMessage(msg, &callID, &toTag, &fromTag); err != nil {
 		return "", err
 	}
-	return MakeDialogID(callID, toTag, fromTag), nil
+	return DialogIDMake(callID, toTag, fromTag), nil
 }
 
-// UASReadRequestDialogID creates dialog ID of message if receiver has UAS role.
+// DialogIDFromRequestUAS creates dialog ID of message if receiver has UAS role.
 // returns error if callid or to tag or from tag does not exists
-func UASReadRequestDialogID(msg *Request) (string, error) {
+func DialogIDFromRequestUAS(msg *Request) (string, error) {
 	var callID, toTag, fromTag string = "", "", ""
 	if err := getDialogIDFromMessage(msg, &callID, &toTag, &fromTag); err != nil {
 		return "", err
 	}
-	return MakeDialogID(callID, toTag, fromTag), nil
+	return DialogIDMake(callID, toTag, fromTag), nil
 }
 
-// UACReadRequestDialogID creates dialog ID of message if receiver has UAC role.
+// DialogIDFromRequestUAC creates dialog ID of message if receiver has UAC role.
 // returns error if callid or to tag or from tag does not exists
-func UACReadRequestDialogID(msg *Request) (string, error) {
+func DialogIDFromRequestUAC(msg *Request) (string, error) {
 	var callID, toTag, fromTag string = "", "", ""
 	if err := getDialogIDFromMessage(msg, &callID, &toTag, &fromTag); err != nil {
 		return "", err
 	}
-	return MakeDialogID(callID, fromTag, toTag), nil
+	return DialogIDMake(callID, fromTag, toTag), nil
 }
 
 func getDialogIDFromMessage(msg Message, callId, toHeaderTag, fromHeaderTag *string) error {
@@ -139,6 +132,6 @@ func getDialogIDFromMessage(msg Message, callId, toHeaderTag, fromHeaderTag *str
 	return nil
 }
 
-func MakeDialogID(callID, innerID, externalID string) string {
+func DialogIDMake(callID, innerID, externalID string) string {
 	return strings.Join([]string{callID, innerID, externalID}, TxSeperator)
 }

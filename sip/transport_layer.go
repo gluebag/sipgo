@@ -16,17 +16,18 @@ var (
 
 	// Errors
 	ErrTransportNotSuported = errors.New("protocol not supported")
+
+	// No need yet to expose
+	errTransportConnectionDoesNotExists = errors.New("connection does not exists")
 )
 
 // TransportLayer implementation.
 type TransportLayer struct {
-	udp *transportUDP
-	tcp *transportTCP
-	tls *transportTLS
-	ws  *transportWS
-	wss *transportWSS
-
-	transports map[string]Transport
+	udp *TransportUDP
+	tcp *TransportTCP
+	tls *TransportTLS
+	ws  *TransportWS
+	wss *TransportWSS
 
 	listenPorts   map[string][]int
 	listenPortsMu sync.Mutex
@@ -36,11 +37,12 @@ type TransportLayer struct {
 
 	log *slog.Logger
 
-	// ConnectionReuse will force connection reuse when passing request
-	ConnectionReuse bool
+	// connectionReuse will force connection reuse when passing request
+	connectionReuse bool
 
-	// PreferSRV does always SRV lookup first
-	DNSPreferSRV bool
+	// dnsPreferSRV does always SRV lookup first
+	dnsPreferSRV bool
+	dnsPreferIP  int // 0 - no preference , 1 -ip4, 2 - ip6
 }
 
 type TransportLayerOption func(l *TransportLayer)
@@ -50,6 +52,48 @@ func WithTransportLayerLogger(logger *slog.Logger) TransportLayerOption {
 		if logger != nil {
 			l.log = logger.With("caller", "TransportLayer")
 		}
+	}
+}
+
+func WithTransportLayerConnectionReuse(f bool) TransportLayerOption {
+	return func(l *TransportLayer) {
+		l.connectionReuse = f
+	}
+}
+
+func WithTransportLayerDNSLookupSRV(preferSRV bool) TransportLayerOption {
+	return func(l *TransportLayer) {
+		l.dnsPreferSRV = preferSRV
+	}
+}
+
+// TODO will be exposed
+// withTransportLayerDNSLookupIP allows to set which ip4 or ip6 to prefer on resolve
+// default is ip4
+func withTransportLayerDNSLookupIP(preferIP string) TransportLayerOption {
+	return func(l *TransportLayer) {
+		switch preferIP {
+		case "ip4":
+			l.dnsPreferIP = 1
+		case "ip6":
+			l.dnsPreferIP = 2
+		default:
+			l.dnsPreferIP = 0
+		}
+	}
+}
+
+type TransportsConfig struct {
+	UDP *TransportUDP
+	TCP *TransportTCP
+	TLS *TransportTLS
+	WS  *TransportWS
+	WSS *TransportWSS
+}
+
+func WithTransportLayerTransports(conf TransportsConfig) TransportLayerOption {
+	return func(l *TransportLayer) {
+		l.withTransports(conf)
 	}
 }
 
@@ -64,11 +108,11 @@ func NewTransportLayer(
 	option ...TransportLayerOption,
 ) *TransportLayer {
 	l := &TransportLayer{
-		transports:      make(map[string]Transport),
 		listenPorts:     make(map[string][]int),
 		dnsResolver:     dnsResolver,
-		ConnectionReuse: true,
-		log:             slog.With("caller", "TransportLayer"),
+		connectionReuse: true,
+		log:             DefaultLogger().With("caller", "TransportLayer"),
+		dnsPreferIP:     1, // IPV4
 	}
 
 	for _, o := range option {
@@ -80,51 +124,61 @@ func NewTransportLayer(
 		tlsConfig = &tlsEmptyConf
 	}
 
-	// Exporting transport configuration
-	// UDP
-	l.udp = &transportUDP{
-		log: l.log.With("caller", "Transport<UDP>"),
+	// Create our default transports settings
+	transports := TransportsConfig{
+		UDP: &TransportUDP{
+			log:             l.log.With("caller", "Transport<UDP>"),
+			connectionReuse: l.connectionReuse,
+		},
+		TCP: &TransportTCP{
+			log:             l.log.With("caller", "Transport<TCP>"),
+			connectionReuse: l.connectionReuse,
+		},
+		TLS: &TransportTLS{
+			TransportTCP: &TransportTCP{
+				log:             l.log.With("caller", "Transport<TLS>"),
+				connectionReuse: l.connectionReuse,
+			},
+		},
+		WS: &TransportWS{
+			log: l.log.With("caller", "Transport<WS>"),
+		},
+		// TODO. Using default dial tls, but it needs to configurable via client
+		WSS: &TransportWSS{
+			TransportWS: &TransportWS{
+				log:             l.log.With("caller", "Transport<WSS>"),
+				connectionReuse: l.connectionReuse,
+			},
+		},
 	}
+
+	l.withTransports(transports)
+
 	l.udp.init(sipparser)
-
-	// TCP
-	l.tcp = &transportTCP{
-		log: l.log.With("caller", "Transport<TCP>"),
-	}
 	l.tcp.init(sipparser)
-
-	// TLS
-	// TODO. Using default dial tls, but it needs to configurable via client
-	l.tls = &transportTLS{
-		transportTCP: &transportTCP{
-			log: l.log.With("caller", "Transport<TLS>"),
-		},
-	}
 	l.tls.init(sipparser, tlsConfig)
-
-	// WS
-	l.ws = &transportWS{
-		log: l.log.With("caller", "Transport<WS>"),
-	}
 	l.ws.init(sipparser)
-
-	// WSS
-	// TODO. Using default dial tls, but it needs to configurable via client
-	l.wss = &transportWSS{
-		transportWS: &transportWS{
-			log: l.log.With("caller", "Transport<WSS>"),
-		},
-	}
 	l.wss.init(sipparser, tlsConfig)
 
-	// Fill map for fast access
-	l.transports["udp"] = l.udp
-	l.transports["tcp"] = l.tcp
-	l.transports["tls"] = l.tls
-	l.transports["ws"] = l.ws
-	l.transports["wss"] = l.wss
-
 	return l
+}
+
+func (l *TransportLayer) withTransports(conf TransportsConfig) {
+	if conf.UDP != nil && l.udp == nil {
+		l.udp = conf.UDP
+	}
+	if conf.TCP != nil && l.tcp == nil {
+		l.tcp = conf.TCP
+	}
+	if conf.TLS != nil && l.tls == nil {
+		l.tls = conf.TLS
+	}
+	if conf.WS != nil && l.ws == nil {
+		l.ws = conf.WS
+	}
+	if conf.WSS != nil && l.wss == nil {
+		l.wss = conf.WSS
+	}
 }
 
 // OnMessage is main function which will be called on any new message by transport layer
@@ -305,20 +359,6 @@ func (l *TransportLayer) WriteMsgTo(msg Message, addr string, network string) er
 		return err
 	}
 
-	// transport, ok := l.transports[network]
-	// if !ok {
-	// 	return fmt.Errorf("transport %s is not supported", network)
-	// }
-
-	// raddr, err := transport.ResolveAddr(addr)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// err = transport.WriteMsg(msg, raddr)
-	// if err != nil {
-	// 	err = fmt.Errorf("send SIP message through %s protocol to %s: %w", network, addr, err)
-	// }
 	return err
 }
 
@@ -330,8 +370,8 @@ func (l *TransportLayer) WriteMsgTo(msg Message, addr string, network string) er
 // other words SetDestination will be called
 func (l *TransportLayer) ClientRequestConnection(ctx context.Context, req *Request) (c Connection, err error) {
 	network := NetworkToLower(req.Transport())
-	transport, ok := l.transports[network]
-	if !ok {
+	transport := l.getTransport(network)
+	if transport == nil {
 		return nil, fmt.Errorf("transport %s is not supported", network)
 	}
 
@@ -356,14 +396,14 @@ func (l *TransportLayer) ClientRequestConnection(ctx context.Context, req *Reque
 	}
 
 	if raddr.IP == nil {
-		if err := l.resolveAddr(ctx, network, host, &raddr); err != nil {
+		if err := l.resolveAddr(ctx, network, host, req.Recipient.Scheme, &raddr); err != nil {
 			return nil, err
 		}
 
 		// Save destination in request to avoid repeated resolving
 		// This also solves problem where subsequent request like NON 2xx ACK can
 		// send on same destination without resolving again.
-		req.SetDestination(raddr.String())
+		// req.SetDestination(raddr.String())
 	}
 
 	// Now use Via header to determine our local address
@@ -385,12 +425,12 @@ func (l *TransportLayer) ClientRequestConnection(ctx context.Context, req *Reque
 
 	// Should we use default transport ports here?
 	laddr := req.Laddr
+	req.raddr = raddr
 
 	// This is probably client forcing host:port
 	if laddr.IP != nil && laddr.Port > 0 {
 		c = transport.GetConnection(laddr.String())
-	} else if l.ConnectionReuse {
-		// viaHop.Params.Add("alias", "")
+	} else if l.connectionReuse {
 		addr := raddr.String()
 		c = transport.GetConnection(addr)
 	}
@@ -411,6 +451,89 @@ func (l *TransportLayer) ClientRequestConnection(ctx context.Context, req *Reque
 	}
 
 	return c, nil
+}
+
+// serverRequestConnection implements serving connection when response needs to be returned
+// Based on: https://datatracker.ietf.org/doc/html/rfc3261#section-18.2.2
+//
+// NOTE: this normally should be called one time for request transaction
+func (l *TransportLayer) serverRequestConnection(ctx context.Context, req *Request) (c Connection, err error) {
+	network := NetworkToLower(req.Transport())
+	transport := l.getTransport(network)
+	if transport == nil {
+		return nil, fmt.Errorf("transport %s is not supported", network)
+	}
+
+	if IsReliable(network) && req.MessageData.Source() != "" {
+		// If the "sent-protocol" is a reliable transport protocol such as
+		//  TCP or SCTP, or TLS over those, the response MUST be sent using
+		//  the existing connection to the source of the original request
+
+		// by default source is set to incoming connection addr
+		conn := transport.GetConnection(req.MessageData.Source())
+		if conn != nil {
+			return conn, nil
+		}
+	}
+
+	host, port := req.sourceViaHostPort()
+	// Use always source addr and via port
+	if sourceAddr := req.MessageData.Source(); sourceAddr != "" {
+		// https://datatracker.ietf.org/doc/html/rfc3263#section-5
+		// 		for unreliable transport protocols, to the source
+		//    address of the request, and the port in the Via header field
+		sourceHost, _, err := ParseAddr(sourceAddr)
+		if err != nil {
+			return nil, err
+		}
+
+		raddr := Addr{
+			IP:   net.ParseIP(sourceHost),
+			Port: port,
+		}
+		if c := transport.GetConnection(raddr.String()); c != nil {
+			/// Set request addr here
+			req.raddr = raddr
+			return c, nil
+		}
+		// Fallback then to Via full host port
+	}
+
+	raddr := Addr{
+		IP:       net.ParseIP(uriNetIP(host)),
+		Port:     port,
+		Hostname: host,
+	}
+
+	if raddr.Port == 0 {
+		// Use default port for transport
+		raddr.Port = DefaultPort(network)
+	}
+
+	if raddr.IP == nil {
+		if err := l.resolveAddr(ctx, network, host, req.Recipient.Scheme, &raddr); err != nil {
+			return nil, err
+		}
+	}
+
+	// What about local Addr? It has usage for client
+	laddr := Addr{}
+	// Set request remote address to be used for further responses
+	// NOTE: for race reasons this should not be exposed
+	req.raddr = raddr
+
+	// Check is there some connection to be reused
+	addr := raddr.String()
+	if c := transport.GetConnection(addr); c != nil {
+		return c, nil
+	}
+
+	if l.log.Enabled(ctx, slog.LevelDebug) {
+		// printing laddr adds some execution
+		l.log.Debug("Creating server connection", "laddr", laddr.String(), "raddr", raddr.String(), "network", network)
+	}
+	c, err = transport.CreateConnection(ctx, laddr, raddr, l.handleMessage)
+	return c, err
 }
 
 func (l *TransportLayer) overrideSentBy(c Connection, viaHop *ViaHeader) error {
@@ -444,7 +567,7 @@ func (l *TransportLayer) overrideSentBy(c Connection, viaHop *ViaHeader) error {
 	return nil
 }
 
-func (l *TransportLayer) resolveAddr(ctx context.Context, network string, host string, addr *Addr) error {
+func (l *TransportLayer) resolveAddr(ctx context.Context, network string, host string, sipScheme string, addr *Addr) error {
 	log := l.log
 	defer func(start time.Time) {
 		if dur := time.Since(start); dur > 50*time.Millisecond {
@@ -452,8 +575,8 @@ func (l *TransportLayer) resolveAddr(ctx context.Context, network string, host s
 		}
 	}(time.Now())
 
-	if l.DNSPreferSRV {
-		err := l.resolveAddrSRV(ctx, network, host, addr)
+	if l.dnsPreferSRV {
+		err := l.resolveAddrSRV(ctx, network, host, sipScheme, addr)
 		if err == nil {
 			return nil
 		}
@@ -467,7 +590,7 @@ func (l *TransportLayer) resolveAddr(ctx context.Context, network string, host s
 	}
 
 	log.Info("IP addr resolving failed, doing via dns SRV resolver...", "error", err)
-	return l.resolveAddrSRV(ctx, network, host, addr)
+	return l.resolveAddrSRV(ctx, network, host, sipScheme, addr)
 }
 
 func (l *TransportLayer) resolveAddrIP(ctx context.Context, hostname string, addr *Addr) error {
@@ -483,19 +606,29 @@ func (l *TransportLayer) resolveAddrIP(ctx context.Context, hostname string, add
 		return fmt.Errorf("lookup ip addr did not return any ip addr")
 	}
 
-	for _, ip := range ips {
-		// This is only correct way to check is ipv4.
-		//  len(ip.IP) == net.IPv4len IS NOT working in all cases
-		if ip.IP.To4() != nil {
-			addr.IP = ip.IP
-			return nil
+	// Prefer IPV4
+	if l.dnsPreferIP > 0 {
+		checkIp := func(ip net.IP) bool {
+			// This is only correct way to check is ipv4.
+			if l.dnsPreferIP == 1 {
+				return ip.To4() != nil
+			}
+			return ip.To4() == nil
+		}
+
+		for _, ip := range ips {
+			if checkIp(ip.IP) {
+				addr.IP = ip.IP
+				return nil
+			}
 		}
 	}
+
 	addr.IP = ips[0].IP
 	return nil
 }
 
-func (l *TransportLayer) resolveAddrSRV(ctx context.Context, network string, hostname string, addr *Addr) error {
+func (l *TransportLayer) resolveAddrSRV(ctx context.Context, network string, hostname string, sipScheme string, addr *Addr) error {
 	log := l.log
 	var proto string
 	switch network {
@@ -507,11 +640,11 @@ func (l *TransportLayer) resolveAddrSRV(ctx context.Context, network string, hos
 		proto = "tcp"
 	}
 
-	log.Debug("Doing SRV lookup", "proto", proto, "host", hostname)
+	log.Debug("Doing SRV lookup", "scheme", sipScheme, "proto", proto, "host", hostname)
 
 	// The returned records are sorted by priority and randomized
 	// by weight within a priority.
-	_, addrs, err := l.dnsResolver.LookupSRV(ctx, "sip", proto, hostname)
+	_, addrs, err := l.dnsResolver.LookupSRV(ctx, sipScheme, proto, hostname)
 	if err != nil {
 		return fmt.Errorf("fail to lookup SRV for %q: %w", hostname, err)
 	}
@@ -542,15 +675,15 @@ func (l *TransportLayer) GetConnection(network, addr string) (Connection, error)
 }
 
 func (l *TransportLayer) getConnection(network, addr string) (Connection, error) {
-	transport, ok := l.transports[network]
-	if !ok {
+	transport := l.getTransport(network)
+	if transport == nil {
 		return nil, fmt.Errorf("transport %s is not supported", network)
 	}
 
 	l.log.Debug("getting connection", "network", network, "addr", addr)
 	c := transport.GetConnection(addr)
 	if c == nil {
-		return nil, fmt.Errorf("connection %q does not exist", addr)
+		return nil, errTransportConnectionDoesNotExists
 	}
 
 	return c, nil
@@ -559,7 +692,10 @@ func (l *TransportLayer) getConnection(network, addr string) (Connection, error)
 func (l *TransportLayer) Close() error {
 	l.log.Debug("Layer is closing")
 	var werr error
-	for _, t := range l.transports {
+	for _, t := range l.allTransports() {
+		if t == nil {
+			continue
+		}
 		if err := t.Close(); err != nil {
 			werr = errors.Join(werr, err)
 		}
@@ -568,6 +704,26 @@ func (l *TransportLayer) Close() error {
 		l.log.Debug("Layer closed with error", "error", werr)
 	}
 	return werr
+}
+
+func (l *TransportLayer) getTransport(network string) transport {
+	switch network {
+	case "udp":
+		return l.udp
+	case "tcp":
+		return l.tcp
+	case "tls":
+		return l.tls
+	case "ws":
+		return l.ws
+	case "wss":
+		return l.wss
+	}
+	return nil
+}
+
+func (l *TransportLayer) allTransports() []transport {
+	return []transport{l.udp, l.tcp, l.tls, l.ws, l.wss}
 }
 
 func IsReliable(network string) bool {

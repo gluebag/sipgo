@@ -33,6 +33,7 @@ func (hp HeaderParams) Keys() []string {
 	i := 0
 	for k := range hp {
 		s[i] = k
+		i++
 	}
 	return s
 }
@@ -111,7 +112,6 @@ func (hp HeaderParams) ToStringWrite(sep uint8, buffer io.StringWriter) {
 		return
 	}
 
-	// sepstr := fmt.Sprintf("%c", sep)
 	sepstr := string(sep)
 	i := 0
 	for k, v := range hp {

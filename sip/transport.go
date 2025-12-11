@@ -8,20 +8,17 @@ import (
 
 var (
 
-	// IdleConnection will keep connections idle even after transaction terminate
+	// TransportIdleConnection will keep connections idle even after transaction terminate
 	// -1 	- single response or request will close
 	// 0 	- close connection immediatelly after transaction terminate
 	// 1 	- keep connection idle after transaction termination
-	IdleConnection int = 1
+	TransportIdleConnection int = 1
 
 	// TransportBufferReadSize sets this buffer size to use on reading SIP messages.
-	TransportBufferReadSize uint16 = 65535
+	TransportBufferReadSize uint16 = 32768
 )
 
 const (
-	MTU uint = 1500
-
-	DefaultHost     = "127.0.0.1"
 	DefaultProtocol = "UDP"
 
 	DefaultUdpPort int = 5060
@@ -29,27 +26,14 @@ const (
 	DefaultTlsPort int = 5061
 	DefaultWsPort  int = 80
 	DefaultWssPort int = 443
-	// Transport for different sip messages. GO uses lowercase, but for message parsing, we should
-	// use this constants for setting message Transport
-	TransportUDP = "UDP"
-	TransportTCP = "TCP"
-	TransportTLS = "TLS"
-	TransportWS  = "WS"
-	TransportWSS = "WSS"
-
-	// TransportFixedLengthMessage sets message size limit for parsing and avoids stream parsing
-	TransportFixedLengthMessage uint16 = 0
 )
 
 // Protocol implements network specific features.
-type Transport interface {
-	Network() string
-
+type transport interface {
 	// GetConnection returns connection from transport
 	// addr must be resolved to IP:port
 	GetConnection(addr string) Connection
 	CreateConnection(ctx context.Context, laddr Addr, raddr Addr, handler MessageHandler) (Connection, error)
-	String() string
 	Close() error
 }
 

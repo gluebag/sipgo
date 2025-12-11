@@ -2,9 +2,14 @@ package sipgo
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/emiago/sipgo/sip"
@@ -52,7 +57,8 @@ func TestClientRequestBuild(t *testing.T) {
 	assert.NotEmpty(t, callid.Value())
 
 	cseq := req.CSeq()
-	assert.Equal(t, "1 OPTIONS", cseq.Value())
+	assert.True(t, cseq.SeqNo > 1)
+	assert.Equal(t, fmt.Sprintf("%d %s", cseq.SeqNo, "OPTIONS"), cseq.Value())
 
 	maxfwd := req.MaxForwards()
 	assert.Equal(t, "70", maxfwd.Value())
@@ -289,6 +295,51 @@ func TestDigestAuthLowerCase(t *testing.T) {
 		URI:      "sip:+user@example.com",
 	})
 	require.NoError(t, err)
+}
+
+func TestIntegrationClientParalelDialing(t *testing.T) {
+	if os.Getenv("TEST_INTEGRATION") == "" {
+		t.Skip("Use TEST_INTEGRATION env value to run this test")
+		return
+	}
+
+	ua, err := NewUA()
+	require.NoError(t, err)
+	defer ua.Close()
+
+	l, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	require.NoError(t, err)
+	defer l.Close()
+	go func() {
+		io.ReadAll(l)
+	}()
+	_, dstPort, err := sip.ParseAddr(l.LocalAddr().String())
+	require.NoError(t, err)
+
+	c, err := NewClient(ua,
+		WithClientHostname("10.0.0.0"),
+		WithClientConnectionAddr("127.0.0.1:15066"),
+	)
+	require.NoError(t, err)
+	wg := sync.WaitGroup{}
+	defer t.Log("Exiting")
+	for i := 0; i < 2*runtime.NumCPU(); i++ {
+		wg.Add(1)
+		t.Log("Running", i)
+		go func() {
+			defer wg.Done()
+			req := sip.NewRequest(sip.INVITE, sip.Uri{Host: "127.0.0.1", Port: dstPort})
+			err := c.WriteRequest(req)
+			require.NoError(t, err)
+		}()
+	}
+
+	wg.Wait()
+
+	// Check that connection reference count
+	conn, err := ua.TransportLayer().GetConnection("udp", "127.0.0.1:15066")
+	require.NoError(t, err)
+	assert.Equal(t, 3, conn.Ref(0))
 }
 
 func BenchmarkClientTransactionRequestBuild(t *testing.B) {

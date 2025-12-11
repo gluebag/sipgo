@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +28,7 @@ func TestIntegrationTransactionLayerServerTx(t *testing.T) {
 	txl := NewTransactionLayer(tp)
 
 	req := testCreateRequest(t, "OPTIONS", "sip:192.168.0.1", "UDP", "127.0.0.1:15069")
-	key, _ := MakeServerTxKey(req)
+	key, _ := ServerTxKeyMake(req)
 
 	var count int32 = 0
 	txl.OnRequest(func(req *Request, tx *ServerTx) {
@@ -35,9 +36,9 @@ func TestIntegrationTransactionLayerServerTx(t *testing.T) {
 		t.Log("Request")
 	})
 
-	// It will fail as it does not have connection
+	// Connection will be created
 	err := txl.handleRequest(req)
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	// Now create connection and test multiple concurent received request
 	tp.udp.CreateConnection(context.TODO(),
@@ -98,4 +99,6 @@ func TestTransactionLayerClientTx(t *testing.T) {
 	wg.Wait()
 	// Only one transaction will be created and executed
 	require.EqualValues(t, 1, atomic.LoadInt32(&count))
+	require.Equal(t, 2, tp.udp.pool.Size())
+	assert.True(t, tp.udp.pool.Get("127.0.0.1:9876") != nil)
 }

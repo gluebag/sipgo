@@ -2,6 +2,8 @@ package sipgo
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
@@ -108,7 +110,7 @@ func WithClientAddr(addr string) ClientOption {
 func NewClient(ua *UserAgent, options ...ClientOption) (*Client, error) {
 	c := &Client{
 		UserAgent: ua,
-		log:       slog.With("caller", "Client"),
+		log:       sip.DefaultLogger().With("caller", "Client"),
 	}
 
 	for _, o := range options {
@@ -133,8 +135,9 @@ func (c *Client) Hostname() string {
 // TransactionRequest uses transaction layer to send request and returns transaction
 // For more correct behavior use client.Do instead which acts same like HTTP req/response
 //
-// By default request will not be cloned and it will populate request with missing headers unless options are used
+// NOTE RACE: By default request will not be cloned and it will populate request with missing headers and data unless options are used
 // In most cases you want this as you will retry with additional headers
+// For other cases call Request.Clone() before doing transaction request
 //
 // Following header fields will be added if not exist to have correct SIP request:
 // To, From, CSeq, Call-ID, Max-Forwards, Via
@@ -147,13 +150,16 @@ func (c *Client) TransactionRequest(ctx context.Context, req *sip.Request, optio
 
 	if len(options) == 0 {
 		clientRequestBuildReq(c, req)
-		return c.requestTransaction(ctx, req)
+	} else {
+		for _, o := range options {
+			if err := o(c, req); err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	for _, o := range options {
-		if err := o(c, req); err != nil {
-			return nil, err
-		}
+	if c.TxRequester != nil {
+		return c.TxRequester.Request(ctx, req)
 	}
 
 	// Do some request validation, but only place as warning
@@ -164,14 +170,39 @@ func (c *Client) TransactionRequest(ctx context.Context, req *sip.Request, optio
 		c.log.Warn("Missing Content-Length for reliable transport")
 	}
 
-	return c.requestTransaction(ctx, req)
+	return c.tx.Request(ctx, req)
 }
 
-func (c *Client) requestTransaction(ctx context.Context, req *sip.Request) (sip.ClientTransaction, error) {
+func (c *Client) newTransaction(ctx context.Context, req *sip.Request, onConnection func(conn sip.Connection) error, options ...ClientRequestOption) (sip.ClientTransaction, error) {
+	if len(options) == 0 {
+		clientRequestBuildReq(c, req)
+	} else {
+		for _, o := range options {
+			if err := o(c, req); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	if c.TxRequester != nil {
 		return c.TxRequester.Request(ctx, req)
 	}
-	return c.tx.Request(ctx, req)
+
+	tx, err := c.tx.NewClientTransaction(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := onConnection(tx.Connection()); err != nil {
+		tx.Terminate()
+		return nil, err
+	}
+
+	err = tx.Init()
+	if err != nil {
+		tx.Terminate()
+	}
+	return tx, err
 }
 
 // Do request is HTTP client like Do request/response.
@@ -362,7 +393,7 @@ func clientRequestBuildReq(c *Client, req *sip.Request) error {
 
 	if v := req.CSeq(); v == nil {
 		cseq := sip.CSeqHeader{
-			SeqNo:      1,
+			SeqNo:      randUniform32() & 0x7FFF, // 0 - 32767
 			MethodName: req.Method,
 		}
 		mustHeader = append(mustHeader, &cseq)
@@ -510,6 +541,9 @@ func ClientRequestIncreaseCSEQ(c *Client, req *sip.Request) error {
 
 func digestProxyAuthApply(req *sip.Request, res *sip.Response, opts digest.Options) error {
 	authHeader := res.GetHeader("Proxy-Authenticate")
+	if authHeader == nil {
+		return fmt.Errorf("No Proxy-Authenticate header present")
+	}
 	chal, err := digest.ParseChallenge(authHeader.Value())
 	if err != nil {
 		return fmt.Errorf("fail to parse challenge authHeader=%q: %w", authHeader.Value(), err)
@@ -566,4 +600,21 @@ func digestProxyAuthRequest(ctx context.Context, client *Client, req *sip.Reques
 	req.RemoveHeader("Via")
 	tx, err := client.TransactionRequest(ctx, req, ClientRequestAddVia)
 	return tx, err
+}
+
+func randUniform32() uint32 {
+	var b [4]byte
+	rand.Read(b[:]) // NOTE: This has panic which should never be called
+
+	x := binary.BigEndian.Uint32(b[:])
+	return max(1, x)
+}
+
+func randUniformRange32(minimum uint32, maximum uint32) uint32 {
+	var b [4]byte
+	rand.Read(b[:])
+
+	x := binary.BigEndian.Uint32(b[:])
+	n := uint32(uint64(x) * uint64(maximum) >> 32)
+	return max(minimum, n)
 }

@@ -51,16 +51,6 @@ func (s *DialogServerSession) ReadBye(req *sip.Request, tx sip.ServerTransaction
 	return nil
 }
 
-// ReadRequest is generic func to validate new request in dialog and update seq. Use it if there are no predefined
-func (s *DialogServerSession) ReadRequest(req *sip.Request, tx sip.ServerTransaction) error {
-	if err := s.validateRequest(req); err != nil {
-		return err
-	}
-
-	s.lastCSeqNo.Store(req.CSeq().SeqNo)
-	return nil
-}
-
 // Do does request response pattern. For more control over transaction use TransactionRequest
 func (s *DialogServerSession) Do(ctx context.Context, req *sip.Request) (*sip.Response, error) {
 	tx, err := s.TransactionRequest(ctx, req)
@@ -94,6 +84,10 @@ func (s *DialogServerSession) TransactionRequest(ctx context.Context, req *sip.R
 	return s.ua.Client.TransactionRequest(ctx, req, func(c *Client, req *sip.Request) error {
 		if req.Via() == nil {
 			ClientRequestAddVia(c, req)
+		}
+		// Makes sure Content-Length is present
+		if req.Body() == nil {
+			req.SetBody(nil)
 		}
 		return nil
 	})
@@ -265,6 +259,8 @@ func (s *DialogServerSession) authDigest(chal *digest.Challenge, opts digest.Opt
 }
 
 // WriteResponse allows passing you custom response
+// NOTE: Make sure you have built response based on dialog.InviteRequest which makes sure
+// that dialog ID do match
 func (s *DialogServerSession) WriteResponse(res *sip.Response) error {
 	tx := s.inviteTx
 
@@ -304,7 +300,7 @@ func (s *DialogServerSession) WriteResponse(res *sip.Response) error {
 		return nil
 	}
 
-	id, err := sip.MakeDialogIDFromResponse(res)
+	id, err := sip.DialogIDFromResponse(res)
 	if err != nil {
 		return err
 	}
@@ -370,6 +366,10 @@ func (s *DialogServerSession) WriteBye(ctx context.Context, bye *sip.Request) er
 		return nil
 	}
 
+	// https://datatracker.ietf.org/doc/html/rfc3261#section-15
+	// However, the callee's UA MUST NOT send a BYE on a confirmed dialog
+	// until it has received an ACK for its 2xx response or until the server
+	// transaction times out.
 	if sip.DialogState(state) != sip.DialogStateConfirmed {
 		return nil
 	}
@@ -382,11 +382,6 @@ func (s *DialogServerSession) WriteBye(ctx context.Context, bye *sip.Request) er
 
 	// This is tricky
 	defer s.inviteTx.Terminate() // Terminates INVITE in all cases
-
-	// https://datatracker.ietf.org/doc/html/rfc3261#section-15
-	// However, the callee's UA MUST NOT send a BYE on a confirmed dialog
-	// until it has received an ACK for its 2xx response or until the server
-	// transaction times out.
 	for {
 		state = s.state.Load()
 		if sip.DialogState(state) < sip.DialogStateConfirmed {
@@ -428,11 +423,7 @@ func (s *DialogServerSession) WriteBye(ctx context.Context, bye *sip.Request) er
 func (dt *DialogServerSession) validateRequest(req *sip.Request) (err error) {
 	// Make sure this is bye for this dialog
 
-	// UAS SHOULD be
-	// prepared to receive and process requests with CSeq values more than
-	// one higher than the previous received request.
-
-	if req.CSeq().SeqNo < dt.lastCSeqNo.Load() {
+	if req.CSeq().SeqNo < dt.InviteRequest.CSeq().SeqNo {
 		return ErrDialogInvalidCseq
 	}
 	return nil
@@ -441,7 +432,7 @@ func (dt *DialogServerSession) validateRequest(req *sip.Request) (err error) {
 // DialogServerCache serves as quick way to start building dialog server
 // It is not optimized version and it is recomended that you build own dialog caching
 type DialogServerCache struct {
-	dialogs sync.Map // TODO replace with typed version
+	dialogs sync.Map
 	ua      DialogUA
 }
 
@@ -456,7 +447,7 @@ func (s *DialogServerCache) loadDialog(id string) *DialogServerSession {
 }
 
 func (s *DialogServerCache) MatchDialogRequest(req *sip.Request) (*DialogServerSession, error) {
-	id, err := sip.UASReadRequestDialogID(req)
+	id, err := sip.DialogIDFromRequestUAS(req)
 	if err != nil {
 		return nil, errors.Join(ErrDialogOutsideDialog, err)
 	}

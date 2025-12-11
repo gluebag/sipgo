@@ -257,7 +257,6 @@ func (tx *ClientTx) actInviteProceeding() fsmInput {
 }
 
 func (tx *ClientTx) actInviteFinal() fsmInput {
-	// tx.Log().Debug("actInviteFinal")
 
 	tx.ack()
 	tx.fsmPassUp()
@@ -272,8 +271,6 @@ func (tx *ClientTx) actInviteFinal() fsmInput {
 		tx.timer_b.Stop()
 		tx.timer_b = nil
 	}
-
-	// tx.Log().Tracef("timer_d set to %v", tx.timer_d_time)
 
 	tx.timer_d = time.AfterFunc(tx.timer_d_time, func() {
 		tx.spinFsm(client_input_timer_d)
@@ -465,11 +462,4 @@ func (tx *ClientTx) passUpRetransmission() {
 
 	// Client probably left or not interested, so therefore we must not block here
 	// For proxies they should handle this retransmission
-	// select {
-	// case <-tx.done:
-	// case tx.responses <- lastResp:
-	// 	// TODO is T1 best here option? This can take Timer_M as 64*T1
-	// case <-time.After(T1):
-	// 	tx.log.Debug("skipped response. Retransimission", "tx", tx.Key())
-	// }
 }

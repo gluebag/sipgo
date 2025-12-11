@@ -19,30 +19,6 @@ const (
 	letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
 )
 
-// https://github.com/kpbird/golang_random_string
-func RandString(n int) string {
-	output := make([]byte, n)
-	// We will take n bytes, one byte for each character of output.
-	randomness := make([]byte, n)
-	// read all random
-	_, err := rand.Read(randomness)
-	if err != nil {
-		panic(err)
-	}
-	l := len(letterBytes)
-	// fill output
-	for pos := range output {
-		// get random item
-		random := randomness[pos]
-		// random % 64
-		randomPos := random % uint8(l)
-		// put into output
-		output[pos] = letterBytes[randomPos]
-	}
-
-	return string(output)
-}
-
 // https://stackoverflow.com/questions/22892120/how-to-generate-a-random-string-of-a-fixed-length-in-go
 func RandStringBytesMask(sb *strings.Builder, n int) string {
 	sb.Grow(n)
@@ -182,7 +158,7 @@ func UriIsSIPS(s string) bool {
 
 // Splits the given string into sections, separated by one or more characters
 // from c_ABNF_WS.
-func SplitByWhitespace(text string) []string {
+func splitByWhitespace(text string) []string {
 	var buffer bytes.Buffer
 	var inString = true
 	result := make([]string, 0)
@@ -207,50 +183,6 @@ func SplitByWhitespace(text string) []string {
 	}
 
 	return result
-}
-
-// A delimiter is any pair of characters used for quoting text (i.e. bulk escaping literals).
-type delimiter struct {
-	start uint8
-	end   uint8
-}
-
-// Define common quote characters needed in parsing.
-var quotesDelim = delimiter{'"', '"'}
-
-var anglesDelim = delimiter{'<', '>'}
-
-// Find the first instance of the target in the given text which is not enclosed in any delimiters
-// from the list provided.
-func findUnescaped(text string, target uint8, delims ...delimiter) int {
-	return findAnyUnescaped(text, string(target), delims...)
-}
-
-// Find the first instance of any of the targets in the given text that are not enclosed in any delimiters
-// from the list provided.
-func findAnyUnescaped(text string, targets string, delims ...delimiter) int {
-	escaped := false
-	var endEscape uint8 = 0
-
-	endChars := make(map[uint8]uint8)
-	for _, delim := range delims {
-		endChars[delim.start] = delim.end
-	}
-
-	for idx := 0; idx < len(text); idx++ {
-		if !escaped && strings.Contains(targets, string(text[idx])) {
-			return idx
-		}
-
-		if escaped {
-			escaped = text[idx] != endEscape
-			continue
-		} else {
-			endEscape, escaped = endChars[text[idx]]
-		}
-	}
-
-	return -1
 }
 
 // ResolveInterfaceIP will check current interfaces and resolve to IP
@@ -312,20 +244,19 @@ func ResolveInterfaceIp(iface net.Interface, network string, targetIP *net.IPNet
 			continue
 		}
 
+		// IP is v6 only if this returns nil
+		isIP4 := ip.To4() != nil
 		switch network {
 		case "ip4":
-			if ip.To4() == nil {
-				continue
+			if isIP4 {
+				return ip, nil
 			}
 
 		case "ip6":
-			// IP is v6 only if this returns nil
-			if ip.To4() != nil {
-				continue
+			if !isIP4 {
+				return ip, nil
 			}
 		}
-
-		return ip, nil
 	}
 	return nil, io.EOF
 }
@@ -338,8 +269,8 @@ func NonceWrite(buf []byte) {
 	}
 }
 
-// MessageShortString dumps short version of msg. Used only for logging
-func MessageShortString(msg Message) string {
+// messageShortString dumps short version of msg. Used only for logging
+func messageShortString(msg Message) string {
 	switch m := msg.(type) {
 	case *Request:
 		return m.Short()
@@ -356,4 +287,38 @@ func compareFunctions(fsm1 any, fsm2 any) error {
 		return fmt.Errorf("Functions are not equal f1=%q, f2=%q", funcName1, funcName2)
 	}
 	return nil
+}
+
+func isIPV6(host string) bool {
+	// Quick reject (has dot)
+	for c := range host {
+		if c == '.' {
+			return false
+		}
+		if c == ':' {
+			break
+		}
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
+}
+
+func uriIP(ip string) string {
+	if isIPV6(ip) {
+		return "[" + ip + "]"
+	}
+	return ip
+}
+
+// uriNetIP returns parsable IP by net
+func uriNetIP(ip string) string {
+	return strings.Trim(ip, "[]")
+}
+
+func printStack(args ...any) {
+	buf := make([]byte, 8192)
+	n := runtime.Stack(buf, false)
+	fmt.Println(args...)
+	fmt.Println(string(buf[:n]))
 }
