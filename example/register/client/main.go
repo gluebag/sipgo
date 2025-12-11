@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/emiago/sipgo"
-	"github.com/emiago/sipgo/sip"
+	"github.com/gluebag/sipgo"
+	"github.com/gluebag/sipgo/sip"
 
 	"github.com/icholy/digest"
 )

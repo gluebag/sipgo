@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emiago/sipgo/sip"
-	"github.com/emiago/sipgo/siptest"
+	"github.com/gluebag/sipgo/sip"
+	"github.com/gluebag/sipgo/siptest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net"
 
-	"github.com/emiago/sipgo/sip"
+	"github.com/gluebag/sipgo/sip"
 	"github.com/google/uuid"
 	"github.com/icholy/digest"
 )
